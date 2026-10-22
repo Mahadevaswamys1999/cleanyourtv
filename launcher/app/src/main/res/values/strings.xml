@@ -1,5 +1,25 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <string name="home_brand">CLEAN YOUR TV</string>
+    <string name="home_brand_subtitle">HOME</string>
+    <string name="home_spotlight">IN FOCUS</string>
+    <string name="home_more_apps">↓  MORE APPS</string>
+    <string name="manage_apps">Edit apps</string>
+    <string name="manage_apps_title">Customize Home</string>
+    <string name="manage_apps_move">Move apps</string>
+    <string name="manage_apps_choose_hide">Hide an app</string>
+    <string name="manage_apps_hidden">Hidden apps</string>
+    <string name="manage_apps_wallpaper">Change wallpaper</string>
+    <string name="manage_apps_none_hidden">No apps are hidden</string>
+    <string name="manage_apps_restore">Restore %1$s to Home?</string>
+    <string name="manage_apps_hide">Hide from Home</string>
+    <string name="manage_apps_move_this">Move this app</string>
+    <string name="manage_apps_details">App info</string>
+    <string name="manage_apps_hide_confirm">Hide %1$s from Home? The app will remain installed and can be restored from Edit apps.</string>
+    <string name="manage_apps_hide_done">Hidden from Home</string>
+    <string name="manage_apps_restore_done">Restored to Home</string>
+    <string name="manage_apps_save_failed">Could not save app visibility</string>
+    <string name="manage_apps_edit_hint">Press OK to pick up an app, use arrows to move, press OK to drop, then Back to save.</string>
     <string name="app_name">Home</string>
     <string name="inputs">Inputs</string>
     <string name="wifi">Wi-Fi</string>
@@ -33,6 +53,9 @@
     <string name="columns_label">Apps per row</string>
     <string name="rows_below_dock_label">Rows below dock</string>
     <string name="wallpaper_label">Wallpaper</string>
+    <string name="wallpaper_import">Choose photo from USB or files…</string>
+    <string name="wallpaper_no_picker">No photo picker installed. Use a file manager or copy the image into the launcher wallpaper folder.</string>
+    <string name="wallpaper_import_failed">Couldn’t use this image. Please choose another photo.</string>
     <string name="wallpaper_state">Wallpaper: %1$s</string>
     <string name="wallpaper_none">None</string>
     <string name="wallpaper_applied">Wallpaper changed</string>

@@ -10,8 +10,8 @@ import android.view.View;
 import java.util.Random;
 
 /**
- * The clock screensaver's scene (layout dream_clock): the thin clock and date on black over a slow ambient
- * glow. Every minute the clock drifts to a new spot and the glow shifts colour, so nothing burns in.
+ * The ambient art gallery and subtle clock move infrequently to avoid leaving static
+ * graphics in one place. There are no continuous rendering loops or network calls.
  * Shared by ClockDream (the system screensaver) and ClockActivity (Home left idle).
  */
 final class ClockScene {
@@ -23,6 +23,7 @@ final class ClockScene {
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final Random random = new Random();
     private final View content;
+    private final ArtGalleryView artwork;
     private final GradientDrawable glow;
     private int colorIndex;
     private int glowColor;
@@ -39,6 +40,7 @@ final class ClockScene {
     /** root is the inflated dream_clock layout. */
     ClockScene(View root) {
         content = root.findViewById(R.id.dreamContent);
+        artwork = root.findViewById(R.id.dreamArtwork);
         View ambient = root.findViewById(R.id.dreamAmbient);
         glow = new GradientDrawable();
         glow.setGradientType(GradientDrawable.RADIAL_GRADIENT);
@@ -50,6 +52,7 @@ final class ClockScene {
     }
 
     void start() {
+        if (artwork != null) artwork.startGallery();
         content.setAlpha(0f);
         content.post(() -> {
             placeClock();
@@ -61,6 +64,8 @@ final class ClockScene {
 
     void stop() {
         handler.removeCallbacks(tick);
+        content.animate().cancel();
+        if (artwork != null) artwork.stopGallery();
     }
 
     private void moveClock() {
@@ -75,8 +80,8 @@ final class ClockScene {
         View parent = (View) content.getParent();
         int maxX = Math.max(0, parent.getWidth() - content.getWidth());
         int maxY = Math.max(0, parent.getHeight() - content.getHeight());
-        float x = maxX * (0.1f + 0.8f * random.nextFloat());
-        float y = maxY * (0.1f + 0.8f * random.nextFloat());
+        float x = maxX * (0.04f + 0.84f * random.nextFloat());
+        float y = maxY * (0.04f + 0.82f * random.nextFloat());
         content.setX(x);
         content.setY(y);
         if (parent.getWidth() > 0 && parent.getHeight() > 0) {

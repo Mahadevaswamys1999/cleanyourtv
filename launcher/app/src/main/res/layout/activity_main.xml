@@ -3,7 +3,7 @@
     android:id="@+id/root"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="#FF000000">
+    android:background="#FF090E16">
 
     <!-- Time-of-day backdrop, drawn once a minute (config.xml sky_intensity; 0 keeps it hidden). -->
     <com.gathin.tvhome.SkyView
@@ -108,20 +108,67 @@
         android:id="@+id/hero"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:layout_marginStart="68dp"
+        android:layout_marginStart="76dp"
         android:orientation="vertical"
         android:alpha="0">
+
+        <!-- A quiet editorial cue above the focused app, using an existing localized label. -->
+        <LinearLayout
+            android:id="@+id/heroEyebrow"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="3dp"
+            android:layout_marginBottom="13dp"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:importantForAccessibility="no">
+
+            <View
+                android:layout_width="24dp"
+                android:layout_height="2dp"
+                android:layout_marginEnd="12dp"
+                android:background="#FF8AE2DF" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/home_spotlight"
+                android:textAllCaps="true"
+                android:fontFamily="@font/outfit_medium"
+                android:textColor="#FFB8D4D9"
+                android:textSize="11sp"
+                android:letterSpacing="0.24"
+                android:includeFontPadding="false" />
+        </LinearLayout>
 
         <TextView
             android:id="@+id/heroName"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
+            android:maxWidth="850dp"
             android:textColor="#FFFFFFFF"
-            android:textSize="48sp"
-            android:fontFamily="@font/outfit_light"
-            android:letterSpacing="-0.02"
+            android:textSize="54sp"
+            android:fontFamily="@font/outfit_medium"
+            android:letterSpacing="-0.025"
             android:includeFontPadding="false"
-            android:singleLine="true" />
+            android:singleLine="true"
+            android:ellipsize="end" />
+
+        <!-- Real offline app-published description where available; otherwise a localized action hint. -->
+        <TextView
+            android:id="@+id/heroSubtitle"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="4dp"
+            android:layout_marginTop="14dp"
+            android:maxWidth="740dp"
+            android:maxLines="1"
+            android:ellipsize="end"
+            android:textColor="#E2C8D0DB"
+            android:textSize="14sp"
+            android:fontFamily="@font/outfit_regular"
+            android:letterSpacing="0.018"
+            android:includeFontPadding="false" />
 
         <!-- Cinematic shelf only: when the app was last opened, and the dock position dots. -->
         <TextView
@@ -129,11 +176,11 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginStart="4dp"
-            android:layout_marginTop="12dp"
+            android:layout_marginTop="16dp"
             android:singleLine="true"
-            android:textColor="#B3FFFFFF"
-            android:textSize="15sp"
-            android:fontFamily="@font/outfit_light"
+            android:textColor="#ABB5C7D1"
+            android:textSize="13sp"
+            android:fontFamily="@font/outfit_regular"
             android:visibility="gone" />
 
         <LinearLayout
@@ -141,7 +188,7 @@
             android:layout_width="wrap_content"
             android:layout_height="6dp"
             android:layout_marginStart="4dp"
-            android:layout_marginTop="16dp"
+            android:layout_marginTop="18dp"
             android:orientation="horizontal"
             android:visibility="gone" />
     </LinearLayout>
@@ -150,9 +197,9 @@
         android:layout_width="match_parent"
         android:layout_height="match_parent"
         android:orientation="vertical"
-        android:paddingStart="56dp"
-        android:paddingEnd="56dp"
-        android:paddingTop="26dp"
+        android:paddingStart="64dp"
+        android:paddingEnd="64dp"
+        android:paddingTop="30dp"
         android:clipChildren="false"
         android:clipToPadding="false">
 
@@ -172,6 +219,50 @@
                 android:layout_marginEnd="16dp"
                 android:orientation="vertical">
 
+                <!-- A quiet permanent identity mark, not another focusable item. -->
+                <LinearLayout
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="4dp"
+                    android:layout_marginBottom="15dp"
+                    android:orientation="horizontal"
+                    android:gravity="center_vertical"
+                    android:importantForAccessibility="no">
+
+                    <View
+                        android:layout_width="8dp"
+                        android:layout_height="8dp"
+                        android:layout_marginEnd="11dp"
+                        android:background="@drawable/home_brand_mark" />
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:fontFamily="@font/outfit_medium"
+                        android:includeFontPadding="false"
+                        android:letterSpacing="0.27"
+                        android:text="@string/home_brand"
+                        android:textColor="#E9F2F6"
+                        android:textSize="12sp" />
+
+                    <View
+                        android:layout_width="1dp"
+                        android:layout_height="13dp"
+                        android:layout_marginStart="18dp"
+                        android:layout_marginEnd="16dp"
+                        android:background="#4D9BADB5" />
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:fontFamily="@font/outfit_regular"
+                        android:includeFontPadding="false"
+                        android:letterSpacing="0.13"
+                        android:text="@string/home_brand_subtitle"
+                        android:textColor="#A6A5B6C3"
+                        android:textSize="10sp" />
+                </LinearLayout>
+
                 <!-- The header texts use gravity left, not start: the launcher lays out left to right
                      (no supportsRtl), and with start a right-to-left script such as Arabic would move to the
                      right edge of these full-width lines instead of staying under the clock. -->
@@ -183,8 +274,8 @@
                     android:singleLine="true"
                     android:ellipsize="end"
                     android:layout_marginStart="4dp"
-                    android:textColor="#8CFFFFFF"
-                    android:textSize="12sp"
+                    android:textColor="#A6A6B7C1"
+                    android:textSize="11sp"
                     android:fontFamily="@font/outfit_medium"
                     android:letterSpacing="0.22"
                     android:textAllCaps="true" />
@@ -202,7 +293,7 @@
                         android:format12Hour="h:mm"
                         android:format24Hour="HH:mm"
                         android:textColor="#FFFFFFFF"
-                        android:textSize="52sp"
+                        android:textSize="43sp"
                         android:fontFamily="@font/outfit_light"
                         android:letterSpacing="-0.04"
                         android:includeFontPadding="false" />
@@ -213,23 +304,23 @@
                         android:layout_height="wrap_content"
                         android:layout_marginStart="6dp"
                         android:layout_gravity="bottom"
-                        android:layout_marginBottom="8dp"
+                        android:layout_marginBottom="5dp"
                         android:format12Hour="a"
                         android:format24Hour=""
-                        android:textColor="#B3FFFFFF"
-                        android:textSize="15sp"
+                        android:textColor="#BDBAC9D3"
+                        android:textSize="12sp"
                         android:fontFamily="@font/outfit_medium"
                         android:letterSpacing="0.08"
                         android:textAllCaps="true" />
 
                     <View
                         android:layout_width="1dp"
-                        android:layout_height="26dp"
+                        android:layout_height="22dp"
                         android:layout_gravity="bottom"
                         android:layout_marginStart="16dp"
                         android:layout_marginEnd="16dp"
-                        android:layout_marginBottom="8dp"
-                        android:background="#33FFFFFF" />
+                        android:layout_marginBottom="5dp"
+                        android:background="#45B0CBD4" />
 
                     <LinearLayout
                         android:layout_width="0dp"
@@ -248,7 +339,7 @@
                             android:singleLine="true"
                             android:ellipsize="end"
                             android:textColor="#E6FFFFFF"
-                            android:textSize="17sp"
+                            android:textSize="14sp"
                             android:fontFamily="@font/outfit_regular"
                             android:letterSpacing="0.02"
                             android:includeFontPadding="false"
@@ -265,8 +356,8 @@
                             android:ellipsize="end"
                             android:format12Hour="@string/date_format_home"
                             android:format24Hour="@string/date_format_home"
-                            android:textColor="#A6FFFFFF"
-                            android:textSize="14sp"
+                            android:textColor="#BBC7D1DB"
+                            android:textSize="12sp"
                             android:fontFamily="@font/outfit_regular"
                             android:letterSpacing="0.14"
                             android:textAllCaps="true" />
@@ -300,7 +391,7 @@
                 android:layout_height="wrap_content"
                 android:layout_alignParentEnd="true"
                 android:layout_alignBottom="@id/leftBlock"
-                android:layout_marginBottom="6dp"
+                android:layout_marginBottom="3dp"
                 android:clipChildren="false"
                 android:clipToPadding="false"
                 android:orientation="horizontal">
@@ -324,8 +415,8 @@
 
                 <TextView
                     android:id="@+id/btnReorder"
-                    style="@style/TopButtonIcon"
-                    android:contentDescription="@string/reorder"
+                    style="@style/TopButton"
+                    android:text="@string/manage_apps"
                     android:drawableStart="@drawable/ic_swap_vert"
                     android:nextFocusDown="@+id/grid" />
 
@@ -366,6 +457,36 @@
                 android:descendantFocusability="afterDescendants" />
         </FrameLayout>
     </LinearLayout>
+
+    <!-- A subtle fold at the bottom of the initial shelf: hides chopped-off grid banners
+         until Down reveals the other apps. It never receives focus or touch input. -->
+    <FrameLayout
+        android:id="@+id/railFooter"
+        android:layout_width="match_parent"
+        android:layout_height="90dp"
+        android:layout_gravity="bottom"
+        android:importantForAccessibility="no"
+        android:focusable="false"
+        android:clickable="false"
+        android:visibility="gone">
+
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:background="@drawable/home_bottom_fade" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="bottom|end"
+            android:layout_marginEnd="69dp"
+            android:layout_marginBottom="17dp"
+            android:fontFamily="@font/outfit_medium"
+            android:letterSpacing="0.22"
+            android:text="@string/home_more_apps"
+            android:textColor="#B2C3D6DD"
+            android:textSize="10sp" />
+    </FrameLayout>
 
     <!-- The single floating glass highlight that springs between tiles. -->
     <com.gathin.tvhome.GlassView

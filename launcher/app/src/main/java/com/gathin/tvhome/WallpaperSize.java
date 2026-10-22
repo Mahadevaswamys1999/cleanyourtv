@@ -18,6 +18,14 @@ final class WallpaperSize {
     static int sampleSize(int width, int height, int screenW, int screenH) {
         int sample = 1;
         while (width / (sample * 2) >= screenW && height / (sample * 2) >= screenH) sample *= 2;
+        // Portrait phone photos often exceed the pixel budget even though their
+        // narrower width cannot cover the 16:9 screen at half resolution. Sample
+        // them safely and let CENTER_CROP upscale the remaining few pixels.
+        // Do not auto-accept pathological panoramas: a 65k-wide file still gets
+        // rejected instead of being silently decoded as a distorted banner.
+        if (width <= 3L * height && height <= 3L * width) {
+            while (!accepted(width / sample, height / sample) && sample <= 16) sample *= 2;
+        }
         return sample;
     }
 

@@ -42,6 +42,12 @@ public class WallpaperSizeTest {
         assertNull(WallpaperSize.coverScale(1280, 720, 1920, 1080));
     }
 
+    @Test public void portraitPhoneWallpaperFitsMemoryBudget() {
+        int sample = WallpaperSize.sampleSize(3000, 4000, 1920, 1080);
+        assertEquals(2, sample);
+        assertTrue(WallpaperSize.accepted(3000 / sample, 4000 / sample));
+    }
+
     @Test
     public void aPhoneSizedPhotoIsAcceptedOnceSampledDown() {
         int s = WallpaperSize.sampleSize(4032, 3024, 1920, 1080);

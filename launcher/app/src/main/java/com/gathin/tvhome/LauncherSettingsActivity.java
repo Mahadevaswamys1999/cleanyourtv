@@ -5,6 +5,8 @@ import android.app.AlertDialog;
 import android.content.ActivityNotFoundException;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.graphics.BitmapFactory;
+import android.net.Uri;
 import android.os.Bundle;
 import android.provider.Settings;
 import android.widget.LinearLayout;
@@ -12,10 +14,15 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import java.io.File;
+import java.io.FileOutputStream;
+import java.io.InputStream;
+import java.nio.file.Files;
+import java.nio.file.StandardCopyOption;
 import java.util.List;
 
 /** Remote-friendly settings owned by the launcher; system settings stay one row away. */
 public final class LauncherSettingsActivity extends Activity {
+    private static final int PICK_WALLPAPER = 83;
     private SharedPreferences choices;
     private final TextView[] columnChoices = new TextView[4];
     private final TextView[] rowChoices = new TextView[4];
@@ -113,7 +120,8 @@ public final class LauncherSettingsActivity extends Activity {
         findViewById(R.id.tvSettingsChoice).setOnClickListener(v ->
                 open(new Intent(Settings.ACTION_SETTINGS)));
         refresh();
-        columnChoices[Math.max(0, Math.min(columns - 4, 3))].requestFocus();
+        if (getIntent().getBooleanExtra("focus_wallpaper", false)) wallpaperChoice.requestFocus();
+        else columnChoices[Math.max(0, Math.min(columns - 4, 3))].requestFocus();
     }
 
     private void reverseRow(TextView[] views) {
@@ -129,21 +137,27 @@ public final class LauncherSettingsActivity extends Activity {
         // A theme with a single wallpaper.jpg offers that picture too (Config maps the choice back to it).
         File single = dir == null ? null : new File(dir, Config.WALLPAPER_NAME);
         if (single != null && single.isFile()) images.add(0, single);
-        String[] labels = new String[images.size() + 1];
-        for (int i = 0; i < images.size(); i++) labels[i] = images.get(i).getName();
-        labels[images.size()] = getString(R.string.wallpaper_none);
+        String[] labels = new String[images.size() + 2];
+        labels[0] = getString(R.string.wallpaper_import);
+        for (int i = 0; i < images.size(); i++) labels[i + 1] = images.get(i).getName();
+        labels[images.size() + 1] = getString(R.string.wallpaper_none);
         String current = choices.getString(Config.WALLPAPER_CHOICE_KEY, null);
-        int checked = "none".equals(current) ? images.size()
-                : indexOf(images, current);
-        new AlertDialog.Builder(this)
+        int index = indexOf(images, current);
+        int checked = "none".equals(current) ? images.size() + 1
+                : index >= 0 ? index + 1 : -1;
+        new AlertDialog.Builder(this, R.style.Theme_ManageDialog)
                 .setTitle(R.string.wallpaper_label)
                 .setSingleChoiceItems(labels, checked, (dialog, which) -> {
                     dialog.dismiss();
-                    if (which == images.size()) {
+                    if (which == 0) {
+                        importWallpaper();
+                        return;
+                    }
+                    if (which == images.size() + 1) {
                         choices.edit().putString(Config.WALLPAPER_CHOICE_KEY, "none").apply();
                     } else {
                         choices.edit().putString(Config.WALLPAPER_CHOICE_KEY,
-                                images.get(which).getName()).apply();
+                                images.get(which - 1).getName()).apply();
                     }
                     setResult(RESULT_OK);
                     Toast.makeText(this, R.string.wallpaper_applied, Toast.LENGTH_SHORT).show();
@@ -156,6 +170,74 @@ public final class LauncherSettingsActivity extends Activity {
                 })
                 .setNegativeButton(android.R.string.cancel, null)
                 .show();
+    }
+
+    private void importWallpaper() {
+        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT)
+                .addCategory(Intent.CATEGORY_OPENABLE).setType("image/*");
+        try {
+            startActivityForResult(intent, PICK_WALLPAPER);
+        } catch (ActivityNotFoundException noDocumentPicker) {
+            try {
+                startActivityForResult(new Intent(Intent.ACTION_GET_CONTENT).setType("image/*"),
+                        PICK_WALLPAPER);
+            } catch (ActivityNotFoundException noFilePicker) {
+                Toast.makeText(this, R.string.wallpaper_no_picker, Toast.LENGTH_LONG).show();
+            }
+        }
+    }
+
+    @Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode != PICK_WALLPAPER || resultCode != RESULT_OK
+                || data == null || data.getData() == null) return;
+        Uri source = data.getData();
+        File dir = Config.dir(this);
+        if (dir == null) {
+            Toast.makeText(this, R.string.wallpaper_import_failed, Toast.LENGTH_LONG).show();
+            return;
+        }
+        // Work on a temporary file; a bad/cancelled import never destroys the prior picture.
+        new Thread(() -> {
+            File pending = new File(dir, "wallpaper-import.tmp");
+            boolean success = false;
+            try (InputStream in = getContentResolver().openInputStream(source);
+                 FileOutputStream out = new FileOutputStream(pending)) {
+                if (in == null) throw new java.io.IOException("Cannot open photo");
+                byte[] buffer = new byte[16_384];
+                int count;
+                long size = 0;
+                while ((count = in.read(buffer)) != -1) {
+                    size += count;
+                    if (size > 24L * 1024L * 1024L) throw new java.io.IOException("Photo too large");
+                    out.write(buffer, 0, count);
+                }
+                out.flush();
+                BitmapFactory.Options bounds = new BitmapFactory.Options();
+                bounds.inJustDecodeBounds = true;
+                BitmapFactory.decodeFile(pending.getPath(), bounds);
+                if (bounds.outWidth < 64 || bounds.outHeight < 64)
+                    throw new java.io.IOException("Not a valid image");
+                Files.move(pending.toPath(), new File(dir, Config.WALLPAPER_NAME).toPath(),
+                        StandardCopyOption.REPLACE_EXISTING);
+                success = true;
+            } catch (Exception ignored) {
+                // Do not expose photo paths or contents in logs.
+            } finally {
+                if (pending.exists()) pending.delete();
+            }
+            final boolean applied = success;
+            runOnUiThread(() -> {
+                if (isFinishing() || isDestroyed()) return;
+                if (applied) {
+                    choices.edit().putString(Config.WALLPAPER_CHOICE_KEY, Config.WALLPAPER_NAME).apply();
+                    setResult(RESULT_OK);
+                    refresh();
+                }
+                Toast.makeText(this, applied ? R.string.wallpaper_applied
+                        : R.string.wallpaper_import_failed, Toast.LENGTH_LONG).show();
+            });
+        }, "TvHome.WallpaperImport").start();
     }
 
     private static int indexOf(List<File> images, String name) {

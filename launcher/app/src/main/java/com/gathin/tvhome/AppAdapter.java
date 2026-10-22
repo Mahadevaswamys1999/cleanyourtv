@@ -57,6 +57,7 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         void onLibraryRequested();
         void onLibraryFocused();
         void onLibraryUp();
+        void onTileOptionsRequested(String pkg, String label, int position);
     }
 
     static final class Entry {
@@ -68,16 +69,19 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         final String pkg;
         final Drawable banner;
         final Drawable icon;
+        /** Optional description published in the installed app's own manifest; never fetched from a service. */
+        final String description;
         /** Text under the tile when it is focused in the grid: the label, plus the caption for a card. */
         final String name;
         /** Ambient glow colour; 0 until sampled from the banner, or the card's accent from the start. */
         int ambient;
 
-        Entry(String label, ComponentName component, Drawable banner, Drawable icon) {
-            this(APP, label, component, banner, icon, null, 0);
+        Entry(String label, ComponentName component, Drawable banner, Drawable icon, String description) {
+            this(APP, label, component, banner, icon, null, 0, description);
         }
 
-        Entry(int kind, String label, ComponentName component, Drawable banner, Drawable icon, String caption, int accent) {
+        Entry(int kind, String label, ComponentName component, Drawable banner, Drawable icon,
+              String caption, int accent, String description) {
             this.kind = kind;
             this.label = label;
             this.component = component;
@@ -86,16 +90,19 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             this.icon = icon;
             this.name = caption == null ? label : label + " \u00B7 " + caption;
             this.ambient = accent;
+            this.description = description;
         }
     }
 
+    // Layout still reserves 10% for a focused tile, even though the new focus motion uses 8%.
+    // That room preserves 6-column + multirow TV grid fit across older configurations.
     static final float FOCUS_SCALE = 1.10f;
     /** Design size of a tile (dp); tiles shrink from here when the columns don't fit, see tileWidthPx. */
-    static final float DESIGN_W_DP = 180f, DESIGN_H_DP = 101f;
+    static final float DESIGN_W_DP = 172f, DESIGN_H_DP = 97f;
 
     /**
      * Tile width for a grid of this inner width: the cell minus room for the focus zoom and the glass
-     * highlight, capped at the design size so 4 columns on a 1080p TV look exactly as before.
+     * highlight, capped at the design size for compact, generous 4-column shelves on a 1080p TV.
      */
     static int tileWidthPx(int innerWidthPx, int columns, float density) {
         int design = Math.round(DESIGN_W_DP * density);
@@ -133,7 +140,7 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
     static final float DOCK_EXTRA_DP = 6 + 12;
     /** Room kept under the last row rows_below_dock asks for (MainActivity places the dock with the same). */
     static final float BOTTOM_ROOM_DP = 30;
-    /** Room kept above the dock for the dock title (48sp hero name plus its 40dp gap) when dock_title is on. */
+    /** Compact title-only shelf when rows below the dock are visible (see MainActivity). */
     static final float TITLE_ROOM_DP = 104;
     /** dock_row false: room above the first row for its zoom and glass (MainActivity places the grid with it). */
     static final float TOP_ROOM_DP = 12;
@@ -186,6 +193,7 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
     private int docked, emptySlots;
     /** Never shown as tiles (res/values/config.xml, hidden_apps). */
     private final Set<String> hidden;
+    private final Set<String> baseHidden;
     private final boolean animations;
     private final boolean advancedEffects;
     private final boolean showLibrary;
@@ -206,7 +214,9 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         this.dockSize = dockSize;
         this.favourites = cfg.dockApps;
         this.fillDock = cfg.fillDock;
-        this.hidden = new HashSet<>(cfg.hiddenApps);
+        this.baseHidden = new HashSet<>(cfg.hiddenApps);
+        this.hidden = new HashSet<>(baseHidden);
+        this.hidden.addAll(HiddenApps.load(ctx));
         this.animations = cfg.animations;
         this.advancedEffects = cfg.animations && cfg.advancedEffects;
         this.showHomeSettings = cfg.showHomeSettingsShortcut;
@@ -271,10 +281,22 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             // The icon is only drawn (and sampled for the glow) when there is no banner, so a tile with a
             // banner skips loading and decoding it.
             Drawable icon = banner == null ? ri.loadIcon(pm) : null;
+            // Only installed-app metadata: many apps do not publish a description, and that's fine.
+            // Read once on reload, never on a D-pad focus callback.
+            String description = null;
+            if (ri.activityInfo.applicationInfo.descriptionRes != 0) {
+                try {
+                    CharSequence published = ri.activityInfo.applicationInfo.loadDescription(pm);
+                    if (published != null) description = Cards.cleanLabel(published.toString(), null);
+                } catch (Resources.NotFoundException | SecurityException ignored) {
+                    // Some vendor apps declare missing resources. The name and generic hint still work.
+                }
+            }
             if (card != null) {
-                fresh.add(new Entry(Entry.CARD, label, component, banner, icon, card.caption, card.accent));
+                fresh.add(new Entry(Entry.CARD, label, component, banner, icon, card.caption, card.accent,
+                        description != null ? description : card.caption));
             } else {
-                fresh.add(new Entry(label, component, banner, icon));
+                fresh.add(new Entry(label, component, banner, icon, description));
             }
         }
         Collections.sort(fresh, (a, b) -> {
@@ -297,18 +319,25 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                 && pm.resolveActivity(new Intent(Settings.ACTION_HOME_SETTINGS), 0) != null) {
             fresh.add(new Entry(Entry.HOME_SETTINGS, ctx.getString(R.string.home_settings),
                     new ComponentName(ctx, HomeSettingsActivity.class), null,
-                    ctx.getDrawable(R.drawable.ic_home_settings), null, 0));
+                    ctx.getDrawable(R.drawable.ic_home_settings), null, 0, null));
         }
         docked = 0;
         while (docked < fresh.size() && favourites.contains(fresh.get(docked).pkg)) docked++;
         emptySlots = dockRow && !reordering ? DockSlots.empty(docked, dockSize, fresh.size(), fillDock) : 0;
         for (int i = 0; i < emptySlots; i++) {
             fresh.add(docked + i, new Entry(Entry.EMPTY, "", new ComponentName(ctx, "empty-dock-slot-" + i),
-                    null, null, null, 0));
+                    null, null, null, 0, null));
         }
         items.clear();
         items.addAll(fresh);
         notifyDataSetChanged();
+    }
+
+    /** Reconcile user hide/restore immediately; no app is uninstalled or disabled. */
+    void refreshHiddenApps() {
+        hidden.clear();
+        hidden.addAll(baseHidden);
+        hidden.addAll(HiddenApps.load(ctx));
     }
 
     /** A banner_* drawable bundled with the launcher, or null for none or a name that is not one. */
@@ -399,6 +428,7 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             // A free dock slot keeps its place in the row and the band, but shows nothing and takes no focus.
             h.card.setVisibility(View.INVISIBLE);
             h.card.setFocusable(false);
+            h.card.setContentDescription(null);
             h.name.setVisibility(View.INVISIBLE);
             h.banner.setImageDrawable(null);
             h.icon.setImageDrawable(null);
@@ -408,6 +438,8 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         }
         h.card.setVisibility(View.VISIBLE);
         h.card.setFocusable(true);
+        // Banners intentionally have no text overlay, so label the focused card for TalkBack.
+        h.card.setContentDescription(e.name);
         h.name.setText(e.name);
         // The dock has no labels, unless always_show_names asks for them (DockDecoration then makes room in the band).
         h.name.setVisibility(dockRow && position < dockSize && restNameAlpha == 0f ? View.INVISIBLE : View.VISIBLE);
@@ -437,12 +469,7 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         }
         h.card.setOnClickListener(v -> launch(e));
         h.card.setOnLongClickListener(v -> {
-            Intent i = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:" + e.pkg));
-            i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-            try {
-                ctx.startActivity(i);
-            } catch (ActivityNotFoundException ignored) {
-            }
+            listener.onTileOptionsRequested(e.pkg, e.label, h.getBindingAdapterPosition());
             return true;
         });
     }
@@ -568,6 +595,10 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         return position >= 0 && position < items.size() ? items.get(position).label : "";
     }
 
+    String descriptionAt(int position) {
+        return position >= 0 && position < items.size() ? items.get(position).description : null;
+    }
+
     String packageAt(int position) {
         return position >= 0 && position < items.size() ? items.get(position).pkg : null;
     }
@@ -580,7 +611,7 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
     }
 
     float focusScale() {
-        return !animations ? 1f : advancedEffects ? 1.12f : 1.10f;
+        return !animations ? 1f : advancedEffects ? 1.10f : 1.08f;
     }
 
     /** A vivid colour sampled from the app's banner (or icon), cached per entry; a card's accent when it set one. */
@@ -636,9 +667,9 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         return Color.HSVToColor(hsv);
     }
 
-    /** Corner radius for a tile of this width: 16dp at the design width, proportionally less when smaller. */
+    /** Corner radius for a tile of this width: 13dp at the design width, proportionally less when smaller. */
     static float cornerRadius(int tileWidthPx, float density) {
-        return 16f * density * Math.min(1f, tileWidthPx / (DESIGN_W_DP * density));
+        return 13f * density * Math.min(1f, tileWidthPx / (DESIGN_W_DP * density));
     }
 
     static final class Holder extends RecyclerView.ViewHolder {
@@ -673,7 +704,7 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             card.setOutlineProvider(new ViewOutlineProvider() {
                 @Override
                 public void getOutline(View view, Outline outline) {
-                    // 16dp at the design width, scaled down with the tile so small tiles keep the same shape.
+                    // 13dp at the design width, scaled down with the tile so small tiles keep the same shape.
                     outline.setRoundRect(0, 0, view.getWidth(), view.getHeight(), cornerRadius(view.getWidth(), density));
                 }
             });
@@ -691,7 +722,7 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                 view.animate().cancel();
                 banner.animate().cancel();
                 name.animate().cancel();
-                float scale = !animations ? 1f : advancedEffects ? 1.12f : 1.10f;
+                float scale = !animations ? 1f : advancedEffects ? 1.10f : 1.08f;
                 float s = focused ? scale : 1f;
                 if (!animations) {
                     view.setScaleX(1f);
@@ -706,7 +737,7 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                     view.animate().scaleX(s).scaleY(s)
                             .translationY(focused && advancedEffects ? -4f * density : 0f)
                             .translationZ(focused && advancedEffects ? 8f * density : 0f)
-                            .setDuration(focused ? 120 : 80)
+                            .setDuration(focused ? 95 : 75)
                             .setInterpolator(new DecelerateInterpolator())
                             .withLayer().start();
                     name.animate().alpha(focused ? 1f : restNameAlpha).setDuration(100).start();
@@ -718,16 +749,16 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                     view.animate().scaleX(s).scaleY(s)
                             .translationY(focused && advancedEffects ? -4f * density : 0f)
                             .translationZ(focused && advancedEffects ? 8f * density : 0f)
-                            .setDuration(advancedEffects ? (focused ? 220 : 170) : (focused ? 260 : 180))
-                            .setInterpolator(new OvershootInterpolator(focused ? (advancedEffects ? 0.7f : 1.6f) : 0f))
-                            .withLayer().start();
+                            .setDuration(focused ? 155 : 125)
+                            .setInterpolator(new OvershootInterpolator(focused ? 0.48f : 0f))
+                            .start();
                     if (advancedEffects) {
                         banner.animate().scaleX(focused ? 1.035f : 1f).scaleY(focused ? 1.035f : 1f)
-                                .setDuration(280).start();
+                                .setDuration(165).start();
                     }
                     name.animate().alpha(focused ? 1f : restNameAlpha)
                             .translationY(focused ? density * 4f : -density * 6f)
-                            .setDuration(220).start();
+                            .setDuration(focused ? 150 : 125).start();
                 }
                 int pos = getBindingAdapterPosition();
                 if (focused && listener != null && pos != RecyclerView.NO_POSITION) {

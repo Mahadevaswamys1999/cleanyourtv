@@ -3,6 +3,7 @@ package com.gathin.tvhome;
 import android.animation.ArgbEvaluator;
 import android.animation.ValueAnimator;
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.app.Dialog;
 import android.content.ActivityNotFoundException;
 import android.content.BroadcastReceiver;
@@ -86,7 +87,7 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * tvOS style home: black, a pinned dock row, an app grid, and one glass highlight that springs between tiles.
+ * Editorial TV home: a dark cinematic focus shelf, a pinned app rail and one efficient focus outline.
  */
 public class MainActivity extends Activity implements AppAdapter.TileListener {
 
@@ -119,8 +120,14 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     private GlassView glass;
     private View ambient;
     private TextView heroName;
+    /** Initial shelf edge; fades once focus moves into lower app rows. */
+    private View railFooter;
     /** The top shelf: heroName, plus the cinematic shelf's "Last opened" line and dock position dots. */
     private View hero;
+    /** Text from the installed app's manifest, or a localized launch hint. No network / content feeds. */
+    private TextView heroSubtitle;
+    /** Keep the older compact shelf when a theme also shows rows beneath the dock. */
+    private boolean compactHero;
     private TextView heroMeta;
     private LinearLayout heroDots;
     /** Cinematic top shelf (config.xml, cinematic_home): the focused dock app's artwork behind a larger shelf. */
@@ -129,7 +136,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
      *  is started for it, so a focus move costs nothing extra on a launcher that runs all day. */
     private boolean ambientGlow;
     private ImageView heroArt;
-    private static final float HERO_ART_ALPHA = 0.5f;
+    private static final float HERO_ART_ALPHA = 0.34f;
     /** Softened artwork per app (HeroArt, about 5 KB each), made the first time its dock tile is focused. */
     private final Map<String, Bitmap> heroArtCache = new HashMap<>();
     /** The app whose artwork heroArt shows, so focusing it again only fades it back in. */
@@ -139,6 +146,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     private int ambientColor = -1;
     private ValueAnimator ambientAnimator;
     private boolean heroShown;
+    /** Focus identity, so two apps with the same label still refresh their shelf and metadata. */
+    private String heroFocusKey;
     private boolean animations;
     private boolean advancedEffects;
     private TextView greeting;
@@ -203,12 +212,16 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     private Dialog cardPrompt;
     /** Set when a decision could not be saved: no more prompts until the next resume, instead of asking in a loop. */
     private boolean promptsPaused;
-    /** Rebuild the tiles on resume: Home was fully hidden by an app, or Home was pressed. Not after a side panel such as Wi-Fi settings. */
+    /** True only for the first load, a real package change, or a low-memory discard. */
     private boolean rebuildOnResume = true;
+    /** A HOME intent received while stopped restores the first dock tile without rebuilding the app list. */
+    private boolean homeFocusPending;
     /** Between onStop and onStart: Home was fully covered by an app, not just by the translucent quick panel. */
     private boolean stopped;
     /** Between onStart and onStop: Home is (at least partly) on screen. */
     private boolean started;
+    /** Package changes should rebuild immediately only while Home is actually resumed. */
+    private boolean homeResumed;
     /** The Inputs or Module cards dropdown while one is open, so onPause can close it. */
     private PopupWindow openPopup;
     /** Reorder mode is on (top-bar button). */
@@ -274,6 +287,13 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             // Updates send REMOVED followed by ADDED; keep the tile until the new APK is ready.
             if (Intent.ACTION_PACKAGE_REMOVED.equals(intent.getAction())
                     && intent.getBooleanExtra(Intent.EXTRA_REPLACING, false)) return;
+            // A different app may install, update or disappear while Home is stopped. Keep this
+            // receiver registered for the activity's lifetime, but do not reload off screen.
+            // The next resume will refresh tiles, module cards and their artwork once.
+            if (!homeResumed) {
+                rebuildOnResume = true;
+                return;
+            }
             reloadApps(false);
             if (appLibrary != null) appLibrary.refresh();
         }
@@ -328,6 +348,13 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         // the theme's background, so launch looks the same.
         getWindow().setBackgroundDrawable(null);
         wallpaperPlayer = new WallpaperPlayer(this, root, cfg);
+        // With no imported/theme photo, show a real full-screen cinematic backdrop,
+        // rather than flat black behind an almost opaque app-art scrim.
+        if (cfg.wallpapers.isEmpty() && cfg.wallpaperEnabled) {
+            root.addView(new PremiumBackdropView(this), 0,
+                    new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                            ViewGroup.LayoutParams.MATCH_PARENT));
+        }
         sky = findViewById(R.id.sky);
         sky.setIntensity(cfg.skyIntensity);
         glass = findViewById(R.id.glass);
@@ -339,7 +366,9 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         ambientGlow = cfg.ambientGlow;
         if (!ambientGlow) ambient.setVisibility(View.GONE);
         heroName = findViewById(R.id.heroName);
+        railFooter = findViewById(R.id.railFooter);
         hero = findViewById(R.id.hero);
+        heroSubtitle = findViewById(R.id.heroSubtitle);
         // The hero is now a group (name, and the cinematic lines): without this every fade of the default
         // shelf would render it through an offscreen buffer first, as the glow above notes.
         hero.forceHasOverlappingRendering(false);
@@ -347,7 +376,15 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         heroDots = findViewById(R.id.heroDots);
         heroArt = findViewById(R.id.heroArt);
         cinematic = cfg.cinematicHome;
+        compactHero = cfg.dockRow && cfg.dockTitle && cfg.rowsBelowDock > 0;
         if (cinematic) setUpCinematicShelf();
+        if (compactHero) {
+            findViewById(R.id.heroEyebrow).setVisibility(View.GONE);
+            heroSubtitle.setVisibility(View.GONE);
+            heroMeta.setVisibility(View.GONE);
+            heroDots.setVisibility(View.GONE);
+            heroName.setTextSize(TypedValue.COMPLEX_UNIT_SP, 48f);
+        }
         // dock_title false: the name above the dock (and the cinematic lines under it) never shows; the glow
         // still follows the dock.
         if (!cfg.dockTitle) hero.setVisibility(View.GONE);
@@ -503,8 +540,9 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
                 s.setSpring(new SpringForce().setStiffness(1400f).setDampingRatio(0.95f));
                 s.setMinimumVisibleChange(1.5f);
             } else {
-                s.setSpring(new SpringForce().setStiffness(advancedEffects ? 320f : 260f)
-                        .setDampingRatio(advancedEffects ? 0.76f : 0.58f));
+                // D-pad movement should feel attached to the focused tile, not bounce after the next press.
+                s.setSpring(new SpringForce().setStiffness(advancedEffects ? 580f : 500f)
+                        .setDampingRatio(advancedEffects ? 0.86f : 0.82f));
             }
         }
 
@@ -518,8 +556,9 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         });
         btnSettings.setOnClickListener(v -> open(systemIntent(Settings.ACTION_SETTINGS)));
         btnReorder = findViewById(R.id.btnReorder);
-        btnReorder.setOnClickListener(v -> toggleReorder());
-        btnReorder.setVisibility(cfg.reorderButton ? View.VISIBLE : View.GONE);
+        btnReorder.setOnClickListener(v -> showManageApps());
+        // Editing is a core TV launcher action, not an obscure Settings long-press feature.
+        btnReorder.setVisibility(View.VISIBLE);
         if (!cfg.showNetworkPill) btnWifi.setVisibility(View.GONE);
         btnLibraryTop = findViewById(R.id.btnLibraryTop);
         btnLibraryTop.setOnClickListener(v -> {
@@ -580,6 +619,13 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         packageFilter.addAction(Intent.ACTION_PACKAGE_REMOVED);
         packageFilter.addAction(Intent.ACTION_PACKAGE_CHANGED);
         packageFilter.addDataScheme("package");
+        // onStop must NOT unregister this receiver: app changes while a streaming app is in
+        // front still need to be reflected on the next Home, without a full reload every time.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(packageReceiver, packageFilter, Context.RECEIVER_NOT_EXPORTED);
+        } else {
+            registerReceiver(packageReceiver, packageFilter);
+        }
         timeFilter.addAction(Intent.ACTION_TIMEZONE_CHANGED);
 
         ConnectivityManager cm = getSystemService(ConnectivityManager.class);
@@ -617,7 +663,9 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         lastFocused = 0;
         lastFocusedKey = adapter.getItemCount() > 0 ? adapter.keyAt(0) : null;
         if (stopped) {
-            rebuildOnResume = true;
+            // The tiles have not changed just because HOME was pressed. Wait until the activity
+            // resumes before requesting focus; a posted callback here could run while hidden.
+            homeFocusPending = true;
         } else {
             // Still on screen (the quick panel was over it, or Home was already in front): the tiles are current,
             // so only go back to the first one; rebuilding would replay the entrance animation for nothing.
@@ -631,10 +679,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         stopped = false;
         started = true;
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            registerReceiver(packageReceiver, packageFilter, Context.RECEIVER_NOT_EXPORTED);
             registerReceiver(timeReceiver, timeFilter, Context.RECEIVER_NOT_EXPORTED);
         } else {
-            registerReceiver(packageReceiver, packageFilter);
             registerReceiver(timeReceiver, timeFilter);
         }
         updateClockVisibility();
@@ -648,14 +694,27 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             recreate();
             return;
         }
+        homeResumed = true;
         restartIdleClock();
         promptsPaused = false;
         if (grid.getAdapter() == null) grid.setAdapter(adapter);   // dropped by onTrimMemory
         if (rebuildOnResume) {
             tilesReady = false;
             reloadApps(true);
+        } else if (homeFocusPending) {
+            // Explicit HOME resets the dock as before, but an ordinary Back/app exit retains
+            // the same focused tile and artwork instantly, with no PackageManager queries.
+            grid.post(() -> {
+                if (!isFinishing() && !isDestroyed()) focusTile(0);
+            });
+        } else {
+            // onPause cancels focus fades so no animations run above a video app. With the
+            // original full reload removed, finish any interrupted fade without decoding
+            // artwork again or leaving the shelf half transparent until the next D-pad press.
+            settleFocusedArtwork();
         }
         rebuildOnResume = false;
+        homeFocusPending = false;
         updateGreeting();
         updateRace();
         // The network and Inputs pills keep their state while Home is in the background, and callbacks update them
@@ -728,6 +787,22 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         }
     }
 
+    /** Restore the already-bound focused art after a normal app return; no package or bitmap work. */
+    private void settleFocusedArtwork() {
+        if (heroShown) {
+            fillHero(lastFocused, adapter.labelAt(lastFocused));
+            hero.setTranslationX(0f);
+            hero.setAlpha(1f);
+            if (cinematic && heroArtKey != null) {
+                heroArt.setImageBitmap(heroArtCache.get(heroArtKey));
+                heroArt.setAlpha(HERO_ART_ALPHA);
+            }
+        }
+        if (ambientGlow && ambient.getBackground() != null && ambient.getAlpha() > 0f) {
+            ambient.setAlpha(1f);
+        }
+    }
+
     /**
      * Rebuilds the tiles; the module cards the owner chose to show stand in for their app's tile.
      * Every step into the card code runs under CardFeature: if it fails, the tiles are the ordinary
@@ -742,10 +817,14 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         // An updated app may bring new artwork; the backdrop is cheap to make again.
         heroArtCache.clear();
         heroArtKey = null;
+        heroFocusKey = null;
         // One LEANBACK query for both the tiles and the card checks.
         final List<ResolveInfo> leanback = getPackageManager().queryIntentActivities(
                 new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LEANBACK_LAUNCHER), 0);
-        cards = moduleCards ? CardFeature.run(() -> Cards.discover(this, hiddenApps,
+        adapter.refreshHiddenApps();
+        Set<String> effectiveHidden = new HashSet<>(hiddenApps);
+        effectiveHidden.addAll(HiddenApps.load(this));
+        cards = moduleCards ? CardFeature.run(() -> Cards.discover(this, effectiveHidden,
                 () -> Cards.load(Cards.storeFile(this)), leanback), none) : none;
         adapter.reload(cards.isEmpty() ? none : CardFeature.run(() -> Cards.shown(cards), none), leanback);
         lastFocusedKey = returnKey;
@@ -784,6 +863,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     @Override
     protected void onPause() {
         super.onPause();
+        homeResumed = false;
         root.removeCallbacks(showIdleClock);
         endReorder();   // Home or another app while reordering keeps the order so far
         wallpaperPlayer.stop();
@@ -805,11 +885,11 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     protected void onStop() {
         super.onStop();
         started = false;
-        unregisterReceiver(packageReceiver);
         unregisterReceiver(timeReceiver);
         handler.removeCallbacks(clockCheck);
         stopped = true;
-        rebuildOnResume = true;
+        // Retain the RecyclerView and tiny cinematic artwork cache on ordinary app exits.
+        // Only the lifetime package receiver or onTrimMemory marks them stale.
     }
 
     /**
@@ -847,6 +927,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     @Override
     protected void onDestroy() {
         super.onDestroy();
+        unregisterReceiver(packageReceiver);
         wallpaperPlayer.close();
         ConnectivityManager cm = getSystemService(ConnectivityManager.class);
         TvInputManager tim = (TvInputManager) getSystemService(TV_INPUT_SERVICE);
@@ -942,7 +1023,129 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         }
         if (!beginReorder()) return;
         focusTile(Math.max(0, Math.min(lastFocused, adapter.movableCount() - 1)));
-        Toast.makeText(this, R.string.reorder_hint, Toast.LENGTH_LONG).show();
+        Toast.makeText(this, R.string.manage_apps_edit_hint, Toast.LENGTH_LONG).show();
+    }
+
+    /** Visible remote-accessible entry point for rearranging and restoring Home tiles. */
+    private void showManageApps() {
+        if (reordering) {
+            endReorder();
+            Toast.makeText(this, R.string.reorder, Toast.LENGTH_SHORT).show();
+            return;
+        }
+        String[] entries = {getString(R.string.manage_apps_move),
+                getString(R.string.manage_apps_choose_hide), getString(R.string.manage_apps_hidden),
+                getString(R.string.manage_apps_wallpaper)};
+        new AlertDialog.Builder(this, R.style.Theme_ManageDialog)
+                .setTitle(R.string.manage_apps_title)
+                .setItems(entries, (dialog, which) -> {
+                    if (which == 0) toggleReorder();
+                    else if (which == 1) showHideApps();
+                    else if (which == 2) showHiddenApps();
+                    else startActivityForResult(new Intent(this, LauncherSettingsActivity.class)
+                            .putExtra("focus_wallpaper", true), LAUNCHER_SETTINGS_REQUEST);
+                })
+                .setNegativeButton(android.R.string.cancel, null)
+                .show();
+    }
+
+    /** A visible picker makes Hide reachable even on remotes with unreliable long-OK. */
+    private void showHideApps() {
+        List<String> packages = new ArrayList<>();
+        List<String> names = new ArrayList<>();
+        for (int i = 0; i < adapter.appCount(); i++) {
+            String pkg = adapter.packageAt(i);
+            if (pkg != null && !pkg.equals(getPackageName()) && !packages.contains(pkg)
+                    && !pkg.equals("com.gathin.tvhome")) {
+                packages.add(pkg);
+                names.add(adapter.labelAt(i));
+            }
+        }
+        String[] labels = names.toArray(new String[0]);
+        new AlertDialog.Builder(this, R.style.Theme_ManageDialog)
+                .setTitle(R.string.manage_apps_choose_hide)
+                .setItems(labels, (dialog, which) -> confirmHideApp(packages.get(which), labels[which]))
+                .setNegativeButton(android.R.string.cancel, null).show();
+    }
+
+    private void confirmHideApp(String pkg, String label) {
+        new AlertDialog.Builder(this, R.style.Theme_ManageDialog)
+                .setMessage(getString(R.string.manage_apps_hide_confirm, label))
+                .setPositiveButton(R.string.manage_apps_hide, (dialog, ignored) -> {
+                    if (!HiddenApps.setHidden(this, pkg, true)) {
+                        Toast.makeText(this, R.string.manage_apps_save_failed, Toast.LENGTH_SHORT).show();
+                        return;
+                    }
+                    reloadApps(false);
+                    Toast.makeText(this, R.string.manage_apps_hide_done, Toast.LENGTH_SHORT).show();
+                })
+                .setNegativeButton(android.R.string.cancel, null).show();
+    }
+
+    /** All user-hidden tiles are restorable here without enabling/disabling any Android packages. */
+    private void showHiddenApps() {
+        Set<String> hidden = HiddenApps.load(this);
+        if (hidden.isEmpty()) {
+            new AlertDialog.Builder(this, R.style.Theme_ManageDialog).setTitle(R.string.manage_apps_hidden)
+                    .setMessage(R.string.manage_apps_none_hidden)
+                    .setPositiveButton(android.R.string.ok, null).show();
+            return;
+        }
+        List<String> packages = new ArrayList<>(hidden);
+        Collections.sort(packages, (a, b) -> appNameFor(a).compareToIgnoreCase(appNameFor(b)));
+        String[] names = new String[packages.size()];
+        for (int i = 0; i < packages.size(); i++) names[i] = appNameFor(packages.get(i));
+        new AlertDialog.Builder(this, R.style.Theme_ManageDialog).setTitle(R.string.manage_apps_hidden)
+                .setItems(names, (dialog, which) -> {
+                    String pkg = packages.get(which);
+                    new AlertDialog.Builder(this, R.style.Theme_ManageDialog)
+                            .setMessage(getString(R.string.manage_apps_restore, names[which]))
+                            .setPositiveButton(R.string.enable, (confirm, ignored) -> {
+                                if (!HiddenApps.setHidden(this, pkg, false)) {
+                                    Toast.makeText(this, R.string.manage_apps_save_failed, Toast.LENGTH_SHORT).show();
+                                    return;
+                                }
+                                reloadApps(false);
+                                Toast.makeText(this, R.string.manage_apps_restore_done, Toast.LENGTH_SHORT).show();
+                            })
+                            .setNegativeButton(android.R.string.cancel, null).show();
+                })
+                .setNegativeButton(android.R.string.cancel, null).show();
+    }
+
+    private String appNameFor(String pkg) {
+        try {
+            return String.valueOf(getPackageManager().getApplicationLabel(
+                    getPackageManager().getApplicationInfo(pkg, 0)));
+        } catch (Exception ignored) {
+            return pkg;
+        }
+    }
+
+    /** Holding OK on any Home tile exposes its real, persistent customization actions. */
+    @Override
+    public void onTileOptionsRequested(String pkg, String label, int position) {
+        if (reordering || position < 0 || position >= adapter.movableCount()) return;
+        String[] options = {getString(R.string.manage_apps_move_this),
+                getString(R.string.manage_apps_hide), getString(R.string.manage_apps_details)};
+        new AlertDialog.Builder(this, R.style.Theme_ManageDialog).setTitle(label).setItems(options, (dialog, which) -> {
+            switch (which) {
+                case 0:
+                    if (!beginReorder()) return;
+                    focusTile(position);
+                    pickUp(position);
+                    Toast.makeText(this, R.string.manage_apps_edit_hint, Toast.LENGTH_LONG).show();
+                    break;
+                case 1:
+                    confirmHideApp(pkg, label);
+                    break;
+                case 2:
+                    open(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                            Uri.parse("package:" + pkg)));
+                    break;
+                default: break;
+            }
+        }).setNegativeButton(android.R.string.cancel, null).show();
     }
 
     /** The start shared by reorder and edit-dock mode. False when there is nothing to move. */
@@ -1171,6 +1374,9 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     public void onTileFocused(int position, View card) {
         lastFocused = position;
         lastFocusedKey = adapter.keyAt(position);
+        boolean showMore = dockRow && adapter.appCount() > COLUMNS && position < COLUMNS;
+        int footerVisibility = showMore ? View.VISIBLE : View.GONE;
+        if (railFooter.getVisibility() != footerVisibility) railFooter.setVisibility(footerVisibility);
         // Focus restored before the first layout (cold start): the tile has no size yet, and the glass
         // would be sized to 2*pad. Run again once the tile is laid out.
         if (card.getWidth() == 0) {
@@ -1269,7 +1475,9 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         String label = adapter.labelAt(position);
         int color = adapter.ambientColorAt(position);
         float y = dockTopInRoot - 14 * density - 26 * density - hero.getHeight();
-        boolean changed = !label.contentEquals(heroName.getText());
+        String key = adapter.keyAt(position);
+        boolean changed = !TextUtils.equals(key, heroFocusKey);
+        heroFocusKey = key;
         if (cinematic) showHeroArt(position);
 
         if (!animations || reducedMotion) {
@@ -1308,12 +1516,14 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             }
             heroShown = true;
         } else if (changed) {
-            if (advancedEffects) hero.animate().cancel();
-            hero.animate().alpha(0f).translationX(-12 * density).setDuration(120).withEndAction(() -> {
+            // Cancel the preceding focus's delayed text swap even in basic motion: a fast
+            // left/right run must never leave the shelf advertising a no-longer-focused app.
+            hero.animate().cancel();
+            hero.animate().alpha(0f).translationX(-8 * density).setDuration(85).withEndAction(() -> {
                 fillHero(position, label);
                 hero.setY(y);
-                hero.setTranslationX(12 * density);
-                hero.animate().alpha(1f).translationX(0f).setDuration(200).start();
+                hero.setTranslationX(8 * density);
+                hero.animate().alpha(1f).translationX(0f).setDuration(145).start();
             }).start();
             if (ambientGlow && advancedEffects) {
                 transitionAmbient(color);
@@ -1331,7 +1541,10 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     /** The shelf's text for this dock app: its name and, on the cinematic shelf, "Last opened" and the dots. */
     private void fillHero(int position, String label) {
         heroName.setText(label);
-        if (!cinematic) return;
+        String description = adapter.descriptionAt(position);
+        heroSubtitle.setText(description != null && !description.isEmpty()
+                ? description : getString(R.string.library_hint_open));
+        if (!cinematic || compactHero) return;
         updateHeroMeta(position);
         updateHeroDots(position);
     }
@@ -1340,7 +1553,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
 
     /** The parts that never change: a larger name, the meta line and the dots, the artwork and the scrim. */
     private void setUpCinematicShelf() {
-        heroName.setTextSize(TypedValue.COMPLEX_UNIT_SP, 68f);
+        heroName.setTextSize(TypedValue.COMPLEX_UNIT_SP, 55f);
         heroName.setLetterSpacing(-0.025f);
         heroMeta.setVisibility(View.INVISIBLE);   // keeps its height, so the name does not jump when it fills in
         heroDots.setVisibility(View.VISIBLE);
@@ -1363,10 +1576,10 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         boolean rtl = getResources().getBoolean(R.bool.rtl_menu_bar);
         Paint paint = new Paint();
         paint.setShader(new LinearGradient(rtl ? w : 0, 0, rtl ? 0 : w, 0,
-                new int[]{0xD1060406, 0x59060406, 0x00060406}, new float[]{0f, 0.42f, 0.7f}, Shader.TileMode.CLAMP));
+                new int[]{0xE5071019, 0x6907111B, 0x0007111B}, new float[]{0f, 0.48f, 0.82f}, Shader.TileMode.CLAMP));
         canvas.drawRect(0, 0, w, h, paint);
         paint.setShader(new LinearGradient(0, 0, 0, h,
-                new int[]{0x00060406, 0x00060406, 0xDB060406, 0xFF060406}, new float[]{0f, 0.28f, 0.58f, 0.76f},
+                new int[]{0x00060C15, 0x13060B13, 0x9C070D15, 0xEC070B11}, new float[]{0f, 0.35f, 0.70f, 1f},
                 Shader.TileMode.CLAMP));
         canvas.drawRect(0, 0, w, h, paint);
         BitmapDrawable scrim = new BitmapDrawable(getResources(), bmp);
@@ -1474,7 +1687,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
                 boolean rtl = getResources().getBoolean(R.bool.rtl_menu_bar);
                 paint.setShader(new RadialGradient(
                         w * (rtl ? 0.20f : 0.80f), h * 0.06f, w * 0.78f,
-                        new int[]{0xA6FFFFFF, 0x47FFFFFF, 0x00FFFFFF},
+                        new int[]{0x55FFFFFF, 0x23FFFFFF, 0x00FFFFFF},
                         new float[]{0f, 0.5f, 1f},
                         Shader.TileMode.CLAMP));
             } else {
@@ -2470,6 +2683,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         if (moduleCards) addSettingsMenuRow(rows, popup, R.string.module_cards, this::showModuleCards);
         if (dockRow) addSettingsMenuRow(rows, popup, R.string.dock_edit, this::startDockEdit);
         addSettingsMenuRow(rows, popup, R.string.reorder, this::toggleReorder);
+        addSettingsMenuRow(rows, popup, R.string.manage_apps_hidden, this::showHiddenApps);
         panel.measure(View.MeasureSpec.UNSPECIFIED, View.MeasureSpec.UNSPECIFIED);
         popup.setWidth(Math.max((int) (200 * density), panel.getMeasuredWidth()));
         // Hebrew puts Settings at the left of the header: grow the menu inward from it.
